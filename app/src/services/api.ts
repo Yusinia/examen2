@@ -29,6 +29,56 @@ export interface OpcionesApi {
  *  8. En cualquier otro caso, devolver el cuerpo JSON.
  */
 export async function api<T = unknown>(ruta: string, opciones: OpcionesApi = {}): Promise<T> {
-  void [ErrorApi, obtenerToken, olvidarSesion, router, BASE_URL, TIEMPO_MAXIMO_MS, ruta, opciones];
-  throw new Error('TODO [M1] api() sin implementar');
+  const { method = 'GET', body, params = {} } = opciones;
+  const url = new URL(BASE_URL.replace(/\/$/, '') + ruta);
+
+  for (const [nombre, valor] of Object.entries(params)) {
+    if (valor != null && valor !== '') {
+      url.searchParams.set(nombre, String(valor));
+    }
+  }
+
+  const headers = new Headers({ Accept: 'application/json' });
+  const token = obtenerToken();
+
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (body !== undefined) headers.set('Content-Type', 'application/json');
+
+  const controller = new AbortController();
+  const temporizador = setTimeout(() => controller.abort(), TIEMPO_MAXIMO_MS);
+  let respuesta: Response;
+  let cuerpo: unknown;
+
+  try {
+    respuesta = await fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    cuerpo = respuesta.status === 204
+      ? null
+      : await respuesta.json().catch((error: unknown) => {
+          if (controller.signal.aborted) throw error;
+          return null;
+        });
+  } catch {
+    throw new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' });
+  } finally {
+    clearTimeout(temporizador);
+  }
+
+  if (respuesta.status === 401 && ruta !== '/login' && token === obtenerToken()) {
+    try {
+      await olvidarSesion();
+    } catch (error) {
+      console.warn('No fue posible borrar la sesión guardada.', error);
+    }
+
+    await router.replace('/login');
+  }
+
+  if (!respuesta.ok) throw new ErrorApi(respuesta.status, cuerpo);
+  return cuerpo as T;
 }
